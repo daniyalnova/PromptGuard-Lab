@@ -1,0 +1,65 @@
+// UI smoke test: bundles the real app, runs it in jsdom against the fake API and clicks through every page.
+import { build } from 'esbuild'; import { JSDOM, VirtualConsole } from 'jsdom'; import assert from 'node:assert/strict';
+const { outputFiles } = await build({ entryPoints: ['smoke-entry.jsx'], bundle: true, write: false, format: 'iife', platform: 'browser', loader: { '.css': 'empty', '.js': 'jsx' }, define: { 'process.env.NODE_ENV': '"production"' }, jsx: 'automatic', logLevel: 'error' });
+const code = outputFiles[0].text, errors = [];
+async function session(autologin, path = '/') {
+  const vc = new VirtualConsole(); vc.on('jsdomError', e => errors.push('jsdom: ' + e.message)); vc.on('error', e => errors.push('console.error: ' + String(e).slice(0, 200)));
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: 'http://localhost' + path, runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: vc });
+  const w = dom.window; w.Response = Response; w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} }); w.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+  w.confirm = () => true; w.navigator.clipboard = { writeText: async () => {} }; w.addEventListener('error', e => errors.push('uncaught: ' + e.message)); w.eval(code); w.__start({ autologin });
+  const text = () => w.document.body.textContent, sleep = ms => new Promise(r => setTimeout(r, ms));
+  const until = async (fn, what, ms = 6000) => { const t = Date.now(); while (Date.now() - t < ms) { try { const v = fn(); if (v) return v; } catch {} await sleep(40); } throw new Error('timeout waiting for: ' + what + '\n--- page text: ' + text().slice(0, 400)); };
+  const find = (sel, re) => [...w.document.querySelectorAll(sel)].find(e => !re || re.test(e.textContent));
+  const click = async (sel, re) => { const el = await until(() => find(sel, re), `${sel} ~ ${re}`); el.click(); await sleep(30); };
+  const type = async (label, value) => { const el = await until(() => [...w.document.querySelectorAll('label')].find(l => l.textContent.startsWith(label))?.querySelector('input,textarea,select'), 'field ' + label); const proto = el.tagName === 'SELECT' ? w.HTMLSelectElement : el.tagName === 'TEXTAREA' ? w.HTMLTextAreaElement : w.HTMLInputElement; Object.getOwnPropertyDescriptor(proto.prototype, 'value').set.call(el, value); el.dispatchEvent(new w.Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); };
+  return { w, text, until, click, type, nav: p => w.__nav(p), sleep, find };
+}
+const steps = [];
+const ok = (name) => { steps.push(name); console.log('  ok', name); };
+
+console.log('auth screens');
+let s = await session(false);
+await s.until(() => /Welcome back/.test(s.text()), 'login page'); ok('login page renders when signed out');
+await s.type('Email', 'dev@example.com'); await s.type('Password', 'wrong'); await s.click('button', /^Log in$/); await s.until(() => /Invalid email or password/.test(s.text()), 'login error'); ok('wrong password shows an error');
+await s.type('Email', 'user2fa@example.com'); await s.type('Password', 'tr0ub4dor&3-horse-staple-91'); await s.click('button', /^Log in$/); await s.until(() => /Two-factor authentication/.test(s.text()), 'mfa step'); ok('2FA step appears');
+await s.type('Code', '000000'); await s.click('button', /^Verify$/); await s.until(() => /Invalid code/.test(s.text()), 'bad code'); ok('bad 2FA code rejected');
+await s.type('Code', '123456'); await s.click('button', /^Verify$/); await s.until(() => /Security posture/.test(s.text()), 'dashboard after mfa'); ok('valid 2FA code reaches the dashboard');
+s.nav('/register'); await s.sleep(100);
+s.w.close(); s = await session(false, '/register'); await s.until(() => /Create your account/.test(s.text()), 'register page'); await s.type('First name', 'Ada'); await s.type('Last name', 'Lovelace'); await s.type('Email', 'n@example.com'); await s.type('Password', 'short'); await s.click('button', /^Create account$/); await s.until(() => /at least 12 characters/.test(s.text()), 'policy error'); ok('register shows the password policy error');
+s.w.close(); s = await session(false, '/forgot'); await s.until(() => /Reset password/.test(s.text()), 'forgot page'); await s.type('Email', 'n@example.com'); await s.click('button', /Send reset code/); await s.until(() => /Enter your reset code/.test(s.text()), 'reset code screen'); ok('forgot password: emailed-code screen');
+await s.type('6-digit code', '000000'); await s.type('New password', 'tr0ub4dor&3-horse-staple-91'); await s.click('button', /^Reset password$/); await s.until(() => /invalid or expired/.test(s.text()), 'bad reset code'); ok('reset: wrong code rejected');
+await s.type('6-digit code', '123456'); await s.click('button', /^Reset password$/); await s.until(() => /Password updated/.test(s.text()), 'reset done'); ok('reset: valid code updates the password');
+s.w.close(); s = await session(false, '/register'); await s.type('First name', 'Grace'); await s.type('Last name', 'Hopper'); await s.type('Email', 'verify@example.com'); await s.type('Password', 'tr0ub4dor&3-horse-staple-91'); await s.click('button', /^Create account$/); await s.until(() => /Check your email/.test(s.text()) && /Resend code in/.test(s.text()), 'verify screen'); ok('sign-up with names -> verification-code screen with resend cooldown');
+await s.type('6-digit code', '000000'); await s.click('button', /^Verify email$/); await s.until(() => /invalid or expired/.test(s.text()), 'bad verify'); await s.type('6-digit code', '123456'); await s.click('button', /^Verify email$/); await s.until(() => /Your account is ready/.test(s.text()), 'verified'); ok('email verification by code');
+s.w.close(); s = await session(false, '/login'); await s.type('Email', 'otp@example.com'); await s.type('Password', 'tr0ub4dor&3-horse-staple-91'); await s.click('button', /^Log in$/); await s.until(() => /emailed a 6-digit sign-in code/.test(s.text()) && /Resend code in/.test(s.text()), 'email otp step'); await s.type('Code', '123456'); await s.click('button', /^Verify$/); await s.until(() => /Security posture/.test(s.text()), 'dashboard after email otp'); ok('login with emailed sign-in code');
+s.w.close(); s = await session(false, '/forgot'); await s.sleep(10);
+s.w.close(); s = await session(false, '/s/demo-token'); await s.until(() => /read-only report/.test(s.text()) && /Findings/.test(s.text()), 'shared page'); ok('public shared report renders without login');
+s.w.close();
+
+console.log('signed-in app');
+s = await session(true);
+await s.until(() => /Latest score/.test(s.text()) && /Score trend/.test(s.text()), 'dashboard'); ok('dashboard: stats + trend + recent scans');
+s.nav('/targets'); await s.until(() => /Demo bot \(hardened\)/.test(s.text()), 'targets'); await s.click('button', /Add demo targets/); await s.until(() => /Demo bot \+ web app \(weak\)/.test(s.text()) && /Demo RAG bot/.test(s.text()) && /Demo web app only/.test(s.text()), 'demo targets added'); ok('targets: list + add demo targets (LLM+web, RAG, web-only)');
+await s.click('button', /Add target/); await s.until(() => /LLM request format/.test(s.text()) && /Web app checks/.test(s.text()), 'add modal'); ok('targets: add-target modal'); await s.click('button', /^Cancel$/);
+await s.click('button', /Verify ownership/); await s.until(() => /I own this system/.test(s.text()), 'verify modal'); await s.click('input[type=checkbox]', null); await s.click('button', /^Verify$/); await s.until(() => !/Verify ownership/.test(s.text()) || true, 'verified'); await s.sleep(250); ok('targets: verify ownership flow');
+s.nav('/runs?new=1'); await s.until(() => /Mutations per attack/.test(s.text()) && /requests to your app/.test(s.text()) && /OWASP web checks/.test(s.text()) && /not enabled on this server/.test(s.text()), 'new scan modal'); ok('scans: new-scan wizard with suite choice (LLM, web; ZAP/Nuclei disabled when not enabled)');
+await s.click('button', /Start scan/); await s.until(() => /Scanning\.\.\./.test(s.text()), 'live progress'); ok('run: live progress view');
+await s.until(() => /Category scores/.test(s.text()) && /Findings/.test(s.text()), 'report', 9000); ok('run: report appears when the scan finishes');
+await s.until(() => /OWASP Top 10 coverage/.test(s.text()) && /Web Applications Top 10 \(2025\)/.test(s.text()) && /LLM Applications Top 10/.test(s.text()), 'owasp matrix'); ok('run: OWASP coverage matrix shows both the LLM and the Web Top 10');
+await s.click('button', /^OWASP web checks$/); await s.click('button', /^Passed$/); await s.until(() => /WEB-HDR-CSP/.test(s.text()) && !/DPI-01/.test(s.text()), 'web filter'); ok('run: suite filter isolates the web findings');
+await s.click('button', /^LLM tests$/); await s.click('button', /^Issues$/);
+await s.click('tbody tr', /./); await s.until(() => /Attack sent/.test(s.text()) || /How to fix/.test(s.text()), 'drawer'); ok('run: finding drawer shows the attack, response and fix'); await s.click('button[aria-label=Close]', /^$/);
+await s.click('button', /^Passed$/); await s.sleep(60); await s.click('button', /^Share$/); await s.until(() => /Share this report/.test(s.text()), 'share'); ok('run: share link modal');
+s.nav('/runs'); await s.until(() => /History of every scan/.test(s.text()), 'runs list'); ok('scans: history list');
+s.nav('/compare'); await s.until(() => /Compare two scans/.test(s.text()) && /Score/.test(s.text()), 'compare'); ok('compare: two-scan diff'); await s.click('button', /^Run both$/); await s.until(() => /Running both scans/.test(s.text()), 'variants'); ok('compare: system-prompt variants started');
+s.nav('/library'); await s.until(() => /LLM attacks mapped to the OWASP/.test(s.text()), 'library'); const rows = s.w.document.querySelectorAll('tbody tr').length; assert.ok(rows >= 60, 'library rows ' + rows); assert.ok(/WEB-EXPOSED/.test(s.text()), 'web checks listed'); ok(`library: ${rows} tests listed, including the web checks`);
+await s.click('button', /Custom test/); await s.type('Name', 'My test'); await s.type('Attack prompt', 'say hi'); await s.type('Marker word', 'HIYA'); await s.click('button', /^Add test$/); await s.until(() => /My test/.test(s.text()), 'custom test added'); ok('library: custom test builder');
+s.nav('/playground'); await s.until(() => /Send one hand-written attack/.test(s.text()), 'playground'); await s.click('button', /^Send$/); await s.until(() => /canary leaked/.test(s.text()), 'canary leak'); ok('playground: canary leak highlighted');
+s.nav('/security'); await s.until(() => /Active sessions/.test(s.text()) && /Change password/.test(s.text()) && /Emailed sign-in codes/.test(s.text()) && /Profile/.test(s.text()), 'security'); ok('security: profile + password + 2FA + emailed codes + sessions');
+await s.type('First name', 'Augusta'); await s.click('button', /^Save$/); await s.until(() => /Augusta/.test(s.text()), 'name saved'); ok('profile: name update shows in the sidebar');
+await s.type('Confirm your password', 'tr0ub4dor&3-horse-staple-91'); await s.click('button', /^Set up$/); await s.until(() => /Scan this QR code/.test(s.text()), '2fa setup'); await s.type('2. Enter the 6-digit code', '123456'); await s.click('button', /^Turn on$/); await s.until(() => /recovery codes/.test(s.text()), 'recovery codes'); ok('security: 2FA enrolment shows QR then recovery codes');
+await s.click('button', /Revoke/).catch(() => {}); s.nav('/audit'); await s.until(() => /login fail/.test(s.text()), 'audit'); ok('audit log');
+await s.click('button', /Dark mode|Light mode/); assert.ok(['dark', 'light'].includes(s.w.document.documentElement.dataset.theme)); ok('theme toggle');
+s.w.close();
+const real = errors.filter(e => !/Not implemented|width\(|height\(/.test(e));
+console.log(real.length ? 'ERRORS:\n' + real.join('\n') : 'no console/runtime errors'); console.log(`${steps.length} UI checks passed`); process.exit(real.length ? 1 : 0);

@@ -1,0 +1,3 @@
+import { createRoot } from 'react-dom/client'; import { BrowserRouter } from 'react-router-dom'; import App from './src/App.jsx'; import { AuthProvider } from './src/auth.jsx'; import { ToastProvider } from './src/ui.jsx'; import { installMock } from './src/preview-mock.js'; import data from './test-data/pgdata.json';
+window.__start = ({ autologin }) => { installMock(data, { autologin }); createRoot(document.getElementById('root')).render(<BrowserRouter><ToastProvider><AuthProvider><App /></AuthProvider></ToastProvider></BrowserRouter>); };
+window.__nav = p => { history.pushState({}, '', p); dispatchEvent(new PopStateEvent('popstate')); };

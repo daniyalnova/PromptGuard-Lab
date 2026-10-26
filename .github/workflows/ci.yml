@@ -1,0 +1,27 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: cd demo-target && npm i
+      - run: cd server && npm i && npm audit --audit-level=high && npm test
+      - run: cd server && npm run test:mongo          # real MongoDB (mongodb-memory-server)
+      - run: cd server && npm run eval                # detector precision/recall report
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: cd client && npm i && npm audit --audit-level=high && npm run build && npm run smoke
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: node scripts/owasp-table.js && node scripts/owasp-web-table.js && git diff --exit-code docs/    # coverage docs must be regenerated when tests change

@@ -1,0 +1,15 @@
+name: PromptGuard scan
+description: Scan an LLM endpoint you own for prompt injection, leaks and unsafe output; fail the build on regressions.
+inputs:
+  config: { description: Path to promptguard.config.json, default: promptguard.config.json }
+  baseline: { description: Baseline file for regression checks, default: promptguard-baseline.json }
+  threshold: { description: Minimum score, default: '70' }
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with: { node-version: 20 }
+    - run: npm install --omit=dev --prefix "${{ github.action_path }}/server"
+      shell: bash
+    - run: node "${{ github.action_path }}/cli/promptguard.js" --config "${{ inputs.config }}" --baseline "${{ inputs.baseline }}" --threshold "${{ inputs.threshold }}" --out promptguard-reports
+      shell: bash

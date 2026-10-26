@@ -1,0 +1,5 @@
+{
+  "consent": true,
+  "target": { "url": "http://localhost:4000/chat?mode=hardened", "bodyTemplate": "{\"messages\":{{MESSAGES}},\"system\":{{SYSTEM}}}", "responsePath": "reply", "canaries": ["CANARY-7f3a9c"], "headers": { "Authorization": "Bearer ${TARGET_API_KEY}" } },
+  "attempts": 2, "mutations": 2, "threshold": 80, "failOn": ["critical", "high"]
+}

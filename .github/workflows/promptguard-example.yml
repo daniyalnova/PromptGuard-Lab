@@ -1,0 +1,20 @@
+# Example: gate pull requests on LLM security. Copy to your app's repo and adjust.
+name: llm-security-gate
+on: pull_request
+permissions: { contents: read, security-events: write }
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: your-org/promptguard-lab@v1          # this repo, published as an action
+        id: scan
+        with: { config: promptguard.config.json, threshold: '80' }
+        continue-on-error: true
+        env: { TARGET_API_KEY: '${{ secrets.TARGET_API_KEY }}' }
+      - uses: github/codeql-action/upload-sarif@v3   # findings appear in the Security tab
+        with: { sarif_file: promptguard-reports/report.sarif.json }
+      - uses: actions/upload-artifact@v4
+        with: { name: promptguard-reports, path: promptguard-reports }
+      - if: steps.scan.outcome == 'failure'
+        run: exit 1

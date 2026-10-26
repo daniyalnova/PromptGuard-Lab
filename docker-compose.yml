@@ -1,0 +1,22 @@
+services:
+  mongo: { image: mongo:7, volumes: [mongo:/data/db] }
+  redis: { image: redis:7-alpine }
+  zap:                                  # optional passive web scanner: docker compose --profile zap up, then set ZAP_URL=http://zap:8090 and ZAP_API_KEY in .env
+    image: ghcr.io/zaproxy/zaproxy:stable
+    profiles: ["zap"]
+    command: ["zap.sh", "-daemon", "-host", "0.0.0.0", "-port", "8090", "-config", "api.key=${ZAP_API_KEY:-}", "-config", "api.addrs.addr.name=.*", "-config", "api.addrs.addr.regex=true"]
+  client:
+    build: ./client
+    ports: ["8080:80"]
+    depends_on: [server]
+  server:
+    build: ./server
+    environment: { MONGO_URL: "mongodb://mongo:27017/promptguard", DEV_ALLOW_LOCAL: "true", JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env (see README)}", ENC_KEY: "${ENC_KEY:?set ENC_KEY in .env (see README)}", APP_URL: "http://localhost:8080", ADMIN_EMAIL: "${ADMIN_EMAIL:-}", REQUIRE_2FA: "${REQUIRE_2FA:-false}", ZAP_URL: "${ZAP_URL:-}", ZAP_API_KEY: "${ZAP_API_KEY:-}", NUCLEI_BIN: "${NUCLEI_BIN:-}", WEB_RPM: "${WEB_RPM:-120}", REQUIRE_EMAIL_VERIFY: "${REQUIRE_EMAIL_VERIFY:-false}", HIBP: "${HIBP:-off}", SMTP_URL: "${SMTP_URL:-}", TARGET_RPM: "120", CLIENT_ORIGIN: "http://localhost:8080,http://127.0.0.1:8080", REDIS_URL: "redis://redis:6379", WORKER_CONCURRENCY: "2", JUDGE: "${JUDGE:-off}", ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}" }
+    volumes: ["./test-suites:/test-suites:ro"]
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [mongo, redis]
+  demo-target:
+    build: ./demo-target
+    environment: { LLM_BACKEND: "${LLM_BACKEND:-mock}", ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}", LLM_MODEL: "${LLM_MODEL:-claude-haiku-5-5}" }
+    ports: ["4000:4000"]
+volumes: { mongo: {} }
